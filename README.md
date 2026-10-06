@@ -88,7 +88,7 @@ them:
 
 | template field | what it actually does |
 |---|---|
-| *Output Format*, *Bitrate*, *Disable Bitrate Conversion* | nothing. Declared `Type="Variable"` with a target of `/etc/spotdl/config.json`, so they create junk environment variables. Settings live in the web UI's Settings page, which writes `~/.config/spotdl/config.json` |
+| *Output Format*, *Bitrate*, *Disable Bitrate Conversion* | nothing. Declared `Type="Variable"` with a target of `/etc/spotdl/config.json`, so they create junk environment variables. Real settings live in `~/.config/spotdl/config.json`, which is a file you edit |
 | *WebGUI Host* | nothing. A `Type="Variable"` aimed at `0.0.0.0` |
 | *Cookie File Path* | mounts a host path that Docker then creates as an empty **directory**. A cookie file has to be a file, so this mount actively gets in the way |
 | *Music Location* / *AppData Directory* | genuinely useful, keep them |
@@ -184,16 +184,24 @@ Unraid users can use *Compose Manager* / *Update Assistant*, or the built-in
   back to the image's original version. Override the entrypoint and the 403 fix
   silently reverses. Pass extra flags via `command:` (or the container's args)
   instead.
-- **Settings live in `~/.config/spotdl/config.json`**, not in env vars. Map
-  `/home/spotdl/.config/spotdl` to a host directory or every recreate resets
-  format, bitrate and output layout. If you came here from the
-  [community Unraid template](https://github.com/MROGHUB/unraid-templates), note
-  that its *Output Format*, *Bitrate* and *Disable Bitrate Conversion* fields are
-  declared as `Type="Variable"` with targets like `/etc/spotdl/config.json`, so
-  they only create junk environment variables — **they do nothing**. Use the web
-  UI's Settings page.
+- **The web UI's Settings dialog does not save.** It shows a green *Changes
+  saved* banner, and it is lying: `handle_post_client_settings` only reassigns
+  the in-memory `client.downloader_settings`, and there is no writer for
+  `config.json` anywhere in spotdl 4.5.2 — the file is only ever created, once,
+  with defaults. So anything you tick there lasts until the container restarts.
+  The settings that matter live in `~/.config/spotdl/config.json`; edit it on
+  the host (map `/home/spotdl/.config/spotdl` to a directory, or it is lost on
+  recreate anyway) and restart the container. Restarting is required regardless
+  of where the change came from: the audio-provider objects are constructed once
+  in `Downloader.__init__`, so a provider list is fixed for the life of the
+  process.
+- If you came here from the
+  [community Unraid template](https://github.com/MROGHUB/unraid-templates), its
+  *Output Format*, *Bitrate* and *Disable Bitrate Conversion* fields are declared
+  as `Type="Variable"` with targets like `/etc/spotdl/config.json`, so they only
+  create junk environment variables — **they do nothing**.
 
-Useful settings, in the web UI under Settings:
+Useful settings, in `~/.config/spotdl/config.json`:
 
 | setting | default | note |
 |---|---|---|
