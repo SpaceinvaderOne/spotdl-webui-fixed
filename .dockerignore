@@ -1,0 +1,6 @@
+dev/
+README.md
+compose.example.yml
+.gitignore
+.github/
+**/__pycache__/**

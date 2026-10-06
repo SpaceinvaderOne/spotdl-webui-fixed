@@ -1,0 +1,5 @@
+dev/.cache/
+dev/work/
+__pycache__/
+*.pyc
+.DS_Store

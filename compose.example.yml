@@ -1,0 +1,26 @@
+services:
+  spotdl:
+    image: ghcr.io/OWNER/spotdl-webui-fixed:latest
+    container_name: spotdl
+    restart: unless-stopped
+
+    # The image already runs as uid/gid 1000. Change both numbers if your music
+    # library is owned by someone else, or downloads land unreadable.
+    #   mkdir -p music config && sudo chown -R 1000:1000 config
+    user: "1000:1000"
+
+    # These arguments are APPENDED to the image's entrypoint, which is
+    #   uv run --project /app --no-dev --frozen --no-sync spotdl
+    # Replace `command:` with `entrypoint:` and the --no-sync flag disappears:
+    # uv then re-resolves /app/uv.lock at startup, downgrades yt-dlp back to the
+    # locked version, and the YouTube 403 fix silently disappears.
+    command: web --host 0.0.0.0 --web-use-output-dir
+
+    ports:
+      - "8800:8800"
+
+    volumes:
+      - ./music:/music
+      # Settings, Spotify cache and the deno runtime live here. Without this
+      # mapping every recreate wipes config.json back to spotdl's defaults.
+      - ./config:/home/spotdl/.config/spotdl

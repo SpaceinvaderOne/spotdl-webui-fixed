@@ -1,0 +1,175 @@
+name: build-and-publish
+
+# Why this exists: the reason downloads broke in the first place was a yt-dlp
+# that was three months old, not anything spotdl-specific. Any hand-built image
+# rots the same way, so the image is rebuilt on a schedule against whatever
+# yt-dlp PyPI is serving that day. The patch anchors double as a tripwire -
+# when upstream rewrites the web UI, this workflow fails instead of quietly
+# publishing an image that rolled their fixes back.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily, 06:17 UTC (odd minute: fewer runner pile-ups)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild and re-push even if the tag already exists"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "Dockerfile"
+      - "patches/**"
+      - "launcher/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+  packages: write
+  issues: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }} # -> ghcr.io/<owner>/<repo>
+  BASE_REPO: spotdl/spotify-downloader
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      skipped: ${{ steps.decide.outputs.skipped }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/setup-qemu-action@v3 # for the linux/arm64 half of the build
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve current upstream versions
+        id: versions
+        run: |
+          set -euo pipefail
+
+          ytdlp=$(curl -fsSL https://pypi.org/pypi/yt-dlp/json | jq -r .info.version)
+
+          # Digest, not tag: the patch is anchored to exact upstream source.
+          base=$(docker buildx imagetools inspect "${BASE_REPO}:latest" \
+                   --format '{{.Manifest.Digest}}')
+          base="${base#sha256:}"
+
+          spotdl=$(docker run --rm --entrypoint /app/.venv/bin/spotdl \
+                     "${BASE_REPO}@sha256:${base}" --version | tr -dc '0-9.')
+
+          echo "ytdlp=${ytdlp}"            | tee -a "$GITHUB_OUTPUT"
+          echo "base_sha=${base}"          | tee -a "$GITHUB_OUTPUT"
+          echo "spotdl=${spotdl}"          | tee -a "$GITHUB_OUTPUT"
+          echo "tag=${ytdlp}-spotdl${spotdl}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Decide whether a build is needed
+        id: decide
+        env:
+          TAG: ${{ steps.versions.outputs.tag }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ "$FORCE" = "true" ]; then
+            echo "forced rebuild"
+          elif docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${TAG}" \
+                 >/dev/null 2>&1; then
+            echo "already published ${TAG}, nothing to do"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Single-arch and --load so it can actually be run here.
+      - name: Build smoke image
+        if: steps.decide.outputs.skipped != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: spotdl-smoke:latest
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_REPO }}@sha256:${{ steps.versions.outputs.base_sha }}
+            YT_DLP_SPEC=yt-dlp[default]==${{ steps.versions.outputs.ytdlp }}
+            IMAGE_VERSION=${{ steps.versions.outputs.tag }}
+            BASE_DIGEST=${{ steps.versions.outputs.base_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        if: steps.decide.outputs.skipped != 'true'
+        run: |
+          set -euo pipefail
+
+          # Patch landed?
+          docker run --rm --entrypoint grep spotdl-smoke:latest \
+            -q "def resolve_songs" /app/spotdl/web/routes.py
+          docker run --rm --entrypoint grep spotdl-smoke:latest \
+            -q "download_song_with_retry" /app/spotdl/web/api.py
+
+          # CLI reachable from a plain shell, and yt-dlp is the version we asked for?
+          docker run --rm --entrypoint sh spotdl-smoke:latest -c \
+            'command -v spotdl >/dev/null && spotdl --version'
+          want="${{ steps.versions.outputs.ytdlp }}"
+          got=$(docker run --rm --entrypoint /app/.venv/bin/yt-dlp spotdl-smoke:latest --version)
+          [ "$got" = "$want" ] || { echo "yt-dlp $got != $want"; exit 1; }
+
+          # Web server boots and answers? Downloads are deliberately NOT tested
+          # here: GitHub's datacenter IPs are blocked by YouTube, so a real
+          # download from CI would be red 99% of the time and tell us nothing.
+          docker run -d --name smoke -p 8800:8800 spotdl-smoke:latest \
+            web --host 0.0.0.0 --web-use-output-dir
+          for _ in $(seq 1 30); do
+            curl -fsS localhost:8800/api/version >/dev/null && break
+            sleep 2
+          done
+          curl -fsS localhost:8800/api/version
+          echo
+          curl -fsS -o /dev/null -w "webui http %{http_code}\n" localhost:8800/
+          docker logs smoke | grep -v -i "error" || true
+          docker stop smoke
+
+      - name: Publish multi-arch image
+        if: steps.decide.outputs.skipped != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            BASE_IMAGE=${{ env.BASE_REPO }}@sha256:${{ steps.versions.outputs.base_sha }}
+            YT_DLP_SPEC=yt-dlp[default]==${{ steps.versions.outputs.ytdlp }}
+            IMAGE_VERSION=${{ steps.versions.outputs.tag }}
+            BASE_DIGEST=${{ steps.versions.outputs.base_sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:spotdl${{ steps.versions.outputs.spotdl }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The patch failing is the interesting failure: it means upstream moved
+      # and the anchors need re-deriving. Make sure a human sees that.
+      - name: Open an issue if the patch drifted
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.versions.outputs.tag }}
+        run: |
+          set -euo pipefail
+          title="Automated build failed: patch anchors drifted (yt-dlp ${TAG})"
+          if gh issue list --state open --json title --jq '.[].title' | grep -Fxq "$title"; then
+            echo "issue already open, leaving it alone"
+            exit 0
+          fi
+          gh issue create --title "$title" --body "The scheduled build could not apply \`patches/patch_webui.py\`. Upstream spotdl has changed the web UI modules; re-derive the patch with \`dev/gen_patch.py\` (see dev/README.md).
+
+          Job: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

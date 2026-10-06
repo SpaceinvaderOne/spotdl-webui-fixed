@@ -1,0 +1,16 @@
+#!/bin/sh
+# Put the `spotdl` console script on PATH.
+#
+# Upstream's ENTRYPOINT is
+#
+#     uv run --project /app --no-dev --frozen --no-sync spotdl
+#
+# which resolves the console script out of /app/.venv/bin for that one process
+# and never exports it. A shell opened with `docker exec -it <c> bash` therefore
+# answers `spotdl: command not found` even though the CLI is installed and works.
+#
+# Note that `--no-sync` above is load-bearing: without it uv re-resolves
+# /app/uv.lock at startup and downgrades yt-dlp back to the locked version,
+# undoing the 403 fix. Do not override the entrypoint.
+
+exec /app/.venv/bin/spotdl "$@"
