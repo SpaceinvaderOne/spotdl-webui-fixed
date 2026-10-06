@@ -17,15 +17,16 @@ image, so upstream keeps owning everything else.
 ## Quick start
 
 ```bash
-mkdir -p music config && sudo chown -R 1000:1000 config
-docker compose -f compose.example.yml up -d      # edit the image: line first
+mkdir -p music config && sudo chown -R 99:100 music config
+docker compose -f compose.example.yml up -d
 ```
 
-Or plainly:
+Or plainly (`--user 99:100` is `nobody:users`, Unraid's convention; drop the
+flag on a normal Linux host and it runs as the image's own uid 1000):
 
 ```bash
 docker run -d --name spotdl --restart unless-stopped \
-  -e PUID=1000 -e PGID=1000 \
+  --user 99:100 \
   -p 8800:8800 \
   -v "$PWD/music:/music" \
   -v "$PWD/config:/home/spotdl/.config/spotdl" \
@@ -43,6 +44,40 @@ CLI too, if you prefer it:
 ```bash
 docker exec -it spotdl spotdl download "https://open.spotify.com/album/..." \
   --output "{artist}/{album}/{track-number} - {title}.{output-ext}"
+```
+
+### Which user should run it?
+
+Whatever uid you pick, the container writes your music as that uid. It does not
+have to match the music directory - an Unraid array share is mounted `0777`, so
+any uid can write into it. What changes is who ends up **owning** the files, and
+on Unraid that matters:
+
+| `--user` | files land as | use when |
+|---|---|---|
+| `99:100` | `nobody:users` | **Unraid.** Matches the array and every other container; `newperms`, mover and the permissions checker all agree with it. |
+| `1000:1000` | your user | A normal Linux host where the library belongs to a real account. |
+| *(omitted)* | `1000:1000` | Same as above - it is the uid baked into the image. |
+
+Verified on a real Unraid array, same track both times:
+
+```
+--user 1000:1000  ->  ed:1000        Drax - Interior.mp3
+--user 99:100     ->  nobody:users   Drax - Interior.mp3
+```
+
+The upstream image cannot run under `--user 99:100` at all: a numeric uid with
+no `/etc/passwd` entry gets `HOME=/` and spotdl tries to create `/.config`, then
+uv's cache is owned by uid 1000 and the entrypoint cannot touch it. This image
+sets `HOME` and moves uv's cache to `/tmp`, so `99:100`, `1000:1000` and root
+all work with **no extra flags or environment variables**. Note that spotdl
+ignores `PUID`/`PGID` entirely - those variables are a LinuxServer.io
+convention, and setting them does nothing here. Use `--user`.
+
+The only requirement: chown the two directories you mount to the same uid.
+
+```bash
+sudo chown -R 99:100 /path/to/music /path/to/config
 ```
 
 ### Tags
@@ -147,15 +182,17 @@ broken". See [`dev/README.md`](dev/README.md).
 ## Troubleshooting
 
 **Container exits immediately with `PermissionError: [Errno 13] ... config.json`.**
-The host directory behind `/home/spotdl/.config/spotdl` is not writable by
-uid 1000. A bind mount keeps the *host* ownership, so a directory created by
-root breaks the container on first start:
+The host directory behind `/home/spotdl/.config/spotdl` is not writable by the
+uid the container runs as. A bind mount keeps the *host* ownership, so a
+directory created by root breaks the container on first start:
 
 ```bash
-sudo chown -R 1000:1000 ./config
+sudo chown -R 99:100 ./config ./music     # or 1000:1000, to match `--user`
 ```
 
-Same story for the music directory if downloads fail with a write error.
+This is the one thing you must get right when switching uids. The image itself
+handles the rest - `HOME`, uv's cache directory and the config path are all set
+up so that `--user 99:100`, `--user 1000:1000` and root work unchanged.
 
 **Everything fails with `AudioProviderError: YT-DLP download error` / `HTTP Error 403`.**
 YouTube is refusing the request. On this image that usually means the container

@@ -91,10 +91,15 @@ jobs:
           TAG: ${{ steps.versions.outputs.tag }}
           IMAGE: ${{ steps.versions.outputs.image }}
           FORCE: ${{ github.event.inputs.force }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          if [ "$FORCE" = "true" ]; then
-            echo "forced rebuild"
+          # Only the daily cron may skip. A push or a manual run means somebody
+          # changed the Dockerfile, the patch or this workflow - and the yt-dlp /
+          # spotdl version pair is unchanged in exactly that case, so skipping on
+          # tag existence alone would refuse to build precisely those changes.
+          if [ "$EVENT" != "schedule" ] || [ "$FORCE" = "true" ]; then
+            echo "building (event=$EVENT force=$FORCE)"
           elif docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${TAG}" \
                  >/dev/null 2>&1; then
             echo "already published ${TAG}, nothing to do"

@@ -4,10 +4,23 @@ services:
     container_name: spotdl
     restart: unless-stopped
 
-    # The image already runs as uid/gid 1000. Change both numbers if your music
-    # library is owned by someone else, or downloads land unreadable.
-    #   mkdir -p music config && sudo chown -R 1000:1000 config
-    user: "1000:1000"
+    # ---- which uid? ---------------------------------------------------------------
+    #
+    # Downloads are written by whatever uid runs the container. That uid does
+    # not have to match the music directory - an Unraid array share is 0777, so
+    # any uid can write into it. What changes is who ends up OWNING the files:
+    #
+    #   99:100     nobody:users. Unraid's own convention, and what every other
+    #              container on an Unraid box writes. Use this on Unraid.
+    #   1000:1000  the uid baked into the image. Right on a normal Linux host
+    #              where the music belongs to a real user account.
+    #
+    # The image runs under either, and under root, with no extra flags. The one
+    # requirement is that both directories below are chowned to whichever uid
+    # you pick:
+    #
+    #   mkdir -p music config && sudo chown -R 99:100 music config
+    user: "99:100"
 
     # These arguments are APPENDED to the image's entrypoint, which is
     #   uv run --project /app --no-dev --frozen --no-sync spotdl

@@ -56,6 +56,22 @@ RUN python3 /tmp/patch_webui.py --spotdl-dir /app/spotdl \
 # `docker exec -it <c> bash` gets "spotdl: command not found".
 COPY --chmod=0755 launcher/spotdl /usr/local/bin/spotdl
 
+# --- 4. make the image work under any uid ------------------------------------------------
+#
+# Run this image as `--user 99:100` (Unraid's `nobody:users`, so downloads land
+# with the same ownership as the rest of the array) and upstream crashes twice:
+#
+#   * a numeric uid with no /etc/passwd entry gets `HOME=/`, so spotdl tries to
+#     create `/.config/spotdl` -> PermissionError
+#   * uv's cache is baked at /home/spotdl/.cache/uv, owned by uid 1000, which
+#     the entrypoint needs to touch -> "Failed to initialize cache"
+#
+# Setting HOME explicitly and moving uv's cache to world-writable /tmp fixes
+# both, so `--user 99:100`, `--user 1000:1000` and root all work with no extra
+# flags. Only requirement: the directories you mount are chowned to that uid.
+ENV HOME=/home/spotdl \
+    UV_CACHE_DIR=/tmp/uv-cache
+
 # Guard rail: never publish an image where the patch did not actually land.
 RUN grep -q "def resolve_songs" /app/spotdl/web/routes.py \
  && grep -q "download_song_with_retry" /app/spotdl/web/api.py \
