@@ -1,6 +1,6 @@
 services:
   spotdl:
-    image: ghcr.io/OWNER/spotdl-webui-fixed:latest
+    image: ghcr.io/spaceinvaderone/spotdl-webui-fixed:latest
     container_name: spotdl
     restart: unless-stopped
 

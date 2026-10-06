@@ -29,7 +29,7 @@ docker run -d --name spotdl --restart unless-stopped \
   -p 8800:8800 \
   -v "$PWD/music:/music" \
   -v "$PWD/config:/home/spotdl/.config/spotdl" \
-  ghcr.io/OWNER/spotdl-webui-fixed:latest \
+  ghcr.io/spaceinvaderone/spotdl-webui-fixed:latest \
   web --host 0.0.0.0 --web-use-output-dir
 ```
 
@@ -104,7 +104,7 @@ tests, and publishes. Rebuilding is only half of it though — *containers do no
 update themselves*:
 
 ```bash
-docker pull ghcr.io/OWNER/spotdl-webui-fixed:latest && docker compose up -d
+docker pull ghcr.io/spaceinvaderone/spotdl-webui-fixed:latest && docker compose up -d
 ```
 
 Or let [watchtower](https://containrrr.dev/watchtower/) do it on a schedule.

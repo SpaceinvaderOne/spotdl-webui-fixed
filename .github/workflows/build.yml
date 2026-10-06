@@ -68,7 +68,19 @@ jobs:
           spotdl=$(docker run --rm --entrypoint /app/.venv/bin/spotdl \
                      "${BASE_REPO}@sha256:${base}" --version | tr -dc '0-9.')
 
+          # ghcr.io rejects uppercase in image names and GitHub logins are
+          # commonly CamelCase, so normalise the repository name once, here.
+          image=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+
+          # PyPI reports 2026.8.19 while `yt-dlp --version` prints the PEP440
+          # normalisation 2026.08.19. Comparing those as strings always fails.
+          ytdlp_norm=$(printf '%s' "$ytdlp" | awk -F. -v OFS=. '{
+            for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) $i = sprintf("%02d", $i)
+          }1')
+
           echo "ytdlp=${ytdlp}"            | tee -a "$GITHUB_OUTPUT"
+          echo "ytdlp_norm=${ytdlp_norm}"  | tee -a "$GITHUB_OUTPUT"
+          echo "image=${image}"            | tee -a "$GITHUB_OUTPUT"
           echo "base_sha=${base}"          | tee -a "$GITHUB_OUTPUT"
           echo "spotdl=${spotdl}"          | tee -a "$GITHUB_OUTPUT"
           echo "tag=${ytdlp}-spotdl${spotdl}" | tee -a "$GITHUB_OUTPUT"
@@ -77,12 +89,13 @@ jobs:
         id: decide
         env:
           TAG: ${{ steps.versions.outputs.tag }}
+          IMAGE: ${{ steps.versions.outputs.image }}
           FORCE: ${{ github.event.inputs.force }}
         run: |
           set -euo pipefail
           if [ "$FORCE" = "true" ]; then
             echo "forced rebuild"
-          elif docker buildx imagetools inspect "${REGISTRY}/${IMAGE_NAME}:${TAG}" \
+          elif docker buildx imagetools inspect "${REGISTRY}/${IMAGE}:${TAG}" \
                  >/dev/null 2>&1; then
             echo "already published ${TAG}, nothing to do"
             echo "skipped=true" >> "$GITHUB_OUTPUT"
@@ -107,35 +120,61 @@ jobs:
       - name: Smoke test
         if: steps.decide.outputs.skipped != 'true'
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
-          # Patch landed?
-          docker run --rm --entrypoint grep spotdl-smoke:latest \
-            -q "def resolve_songs" /app/spotdl/web/routes.py
-          docker run --rm --entrypoint grep spotdl-smoke:latest \
-            -q "download_song_with_retry" /app/spotdl/web/api.py
+          # Print the container's own output on any failure. Without this the
+          # only evidence left in the log is "exit code 1", which sends you
+          # guessing at which of these six checks broke.
+          fail() {
+            echo "::error::$1"
+            echo "--- docker logs smoke ---"
+            docker logs smoke 2>&1 | tail -40
+            exit 1
+          }
 
-          # CLI reachable from a plain shell, and yt-dlp is the version we asked for?
+          # The patch must actually be in the shipped modules.
+          docker run --rm --entrypoint grep spotdl-smoke:latest \
+            -q "def resolve_songs" /app/spotdl/web/routes.py \
+            || fail "web/routes.py is not patched"
+          docker run --rm --entrypoint grep spotdl-smoke:latest \
+            -q "download_song_with_retry" /app/spotdl/web/api.py \
+            || fail "web/api.py is not patched"
+
+          # The CLI must work from a plain shell, at the version we built from.
           docker run --rm --entrypoint sh spotdl-smoke:latest -c \
-            'command -v spotdl >/dev/null && spotdl --version'
-          want="${{ steps.versions.outputs.ytdlp }}"
-          got=$(docker run --rm --entrypoint /app/.venv/bin/yt-dlp spotdl-smoke:latest --version)
-          [ "$got" = "$want" ] || { echo "yt-dlp $got != $want"; exit 1; }
+            'command -v spotdl >/dev/null && spotdl --version' \
+            || fail "spotdl is not runnable via /usr/local/bin/spotdl"
 
-          # Web server boots and answers? Downloads are deliberately NOT tested
-          # here: GitHub's datacenter IPs are blocked by YouTube, so a real
-          # download from CI would be red 99% of the time and tell us nothing.
+          want="${{ steps.versions.outputs.ytdlp_norm }}"
+          got=$(docker run --rm --entrypoint /app/.venv/bin/yt-dlp spotdl-smoke:latest --version) \
+            || fail "yt-dlp would not run"
+          # numeric compare: newest of the two, first, must be the expectation
+          oldest=$(printf '%s\n%s\n' "$want" "$got" | sort -V | head -1)
+          [ "$oldest" = "$want" ] || fail "yt-dlp $got is older than $want"
+          echo "yt-dlp $got (expected >= $want)"
+
+          # The web server must boot and answer. Downloads are deliberately NOT
+          # tested here: GitHub's datacenter IPs are bot-blocked by YouTube, so a
+          # real download from CI would be red 99% of the time and tell us
+          # nothing. 127.0.0.1, not localhost - the runner prefers IPv6 and the
+          # container only binds v4.
           docker run -d --name smoke -p 8800:8800 spotdl-smoke:latest \
-            web --host 0.0.0.0 --web-use-output-dir
-          for _ in $(seq 1 30); do
-            curl -fsS localhost:8800/api/version >/dev/null && break
+            web --host 0.0.0.0 --web-use-output-dir >/dev/null
+
+          ready=""
+          for _ in $(seq 1 60); do
+            if curl -fsS -m 5 http://127.0.0.1:8800/api/version >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
             sleep 2
           done
-          curl -fsS localhost:8800/api/version
-          echo
-          curl -fsS -o /dev/null -w "webui http %{http_code}\n" localhost:8800/
-          docker logs smoke | grep -v -i "error" || true
-          docker stop smoke
+          [ -n "$ready" ] || fail "web server never answered on :8800 after 120s"
+
+          echo "api/version: $(curl -fsS http://127.0.0.1:8800/api/version)"
+          echo "web UI: http $(curl -fsS -o /dev/null -w '%{http_code}' http://127.0.0.1:8800/)"
+          docker logs smoke 2>&1 | tail -12
+          docker stop smoke >/dev/null
 
       - name: Publish multi-arch image
         if: steps.decide.outputs.skipped != 'true'
@@ -150,9 +189,9 @@ jobs:
             IMAGE_VERSION=${{ steps.versions.outputs.tag }}
             BASE_DIGEST=${{ steps.versions.outputs.base_sha }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.versions.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:spotdl${{ steps.versions.outputs.spotdl }}
+            ${{ env.REGISTRY }}/${{ steps.versions.outputs.image }}:latest
+            ${{ env.REGISTRY }}/${{ steps.versions.outputs.image }}:${{ steps.versions.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.versions.outputs.image }}:spotdl${{ steps.versions.outputs.spotdl }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
