@@ -80,6 +80,36 @@ The only requirement: chown the two directories you mount to the same uid.
 sudo chown -R 99:100 /path/to/music /path/to/config
 ```
 
+### Coming from the community Unraid template
+
+If you installed spotdl through Community Applications, the template has a few
+fields that do nothing, and they cost hours to debug if you do not know about
+them:
+
+| template field | what it actually does |
+|---|---|
+| *Output Format*, *Bitrate*, *Disable Bitrate Conversion* | nothing. Declared `Type="Variable"` with a target of `/etc/spotdl/config.json`, so they create junk environment variables. Settings live in the web UI's Settings page, which writes `~/.config/spotdl/config.json` |
+| *WebGUI Host* | nothing. A `Type="Variable"` aimed at `0.0.0.0` |
+| *Cookie File Path* | mounts a host path that Docker then creates as an empty **directory**. A cookie file has to be a file, so this mount actively gets in the way |
+| *Music Location* / *AppData Directory* | genuinely useful, keep them |
+| *(nothing maps the config dir)* | the real gap: settings and cache were wiped on every recreate |
+
+Switching to this image means removing any `PYTHONPATH` variable, patched-file
+bind mounts or CLI launcher mounts you added to work around the bugs above - the
+image contains all of them, and a leftover bind mount would override the
+build-time patch, which is exactly the thing that detects upstream drift.
+
+`unraid/switch-to-image.py` does the migration: it retargets the template at
+this image, adds `--user 99:100`, maps the config directory, and deletes the
+nine dead or redundant entries. It prints what it will do and writes nothing
+until `--apply`, backs up the XML first, and refuses to write XML that does not
+parse.
+
+```bash
+python3 unraid/switch-to-image.py          # dry run
+python3 unraid/switch-to-image.py --apply  # then Edit -> Apply in the Unraid UI
+```
+
 ### Tags
 
 | tag | meaning |
