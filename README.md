@@ -115,8 +115,16 @@ python3 unraid/switch-to-image.py --apply  # then Edit -> Apply in the Unraid UI
 | tag | meaning |
 |---|---|
 | `latest` | newest successful build |
-| `2026.08.19-spotdl4.5.2` | exact yt-dlp + spotdl pair, never re-pointed |
+| `2026.08.19-spotdl4.5.2-r2` | exact yt-dlp + spotdl + patch revision |
 | `spotdl4.5.2` | newest yt-dlp for that spotdl release |
+
+The trailing `-r2` is the revision of this repo's patch, taken from
+`VERSION` in `patches/patch_webui.py`. It is there because the yt-dlp and spotdl
+versions alone cannot distinguish two builds: the search-freeze fix changed
+neither, so without a revision it would have been published over the top of an
+identical tag name and a host pinning that tag could not tell which build it
+had. Versioned tags are otherwise never re-pointed; `spotdl4.5.2` and `latest`
+are.
 
 Pin a versioned tag if you want predictability; pin `latest` if you want the
 yt-dlp refresh and are happy to `docker pull` (see *Staying current*).

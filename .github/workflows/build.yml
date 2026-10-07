@@ -78,12 +78,27 @@ jobs:
             for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) $i = sprintf("%02d", $i)
           }1')
 
+          # Our own revision, from the patch script: 4.5.2-r2 -> r2. Without it,
+          # two builds of the same yt-dlp/spotdl pair would publish under the
+          # same tag name, so a host that pins anything other than :latest
+          # cannot tell which build it actually got.
+          rev=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' patches/patch_webui.py | head -1)
+          case "$rev" in
+            *-*) rev="${rev##*-}" ;;
+            *)   rev="r0" ;;
+          esac
+
           echo "ytdlp=${ytdlp}"            | tee -a "$GITHUB_OUTPUT"
           echo "ytdlp_norm=${ytdlp_norm}"  | tee -a "$GITHUB_OUTPUT"
           echo "image=${image}"            | tee -a "$GITHUB_OUTPUT"
           echo "base_sha=${base}"          | tee -a "$GITHUB_OUTPUT"
           echo "spotdl=${spotdl}"          | tee -a "$GITHUB_OUTPUT"
-          echo "tag=${ytdlp}-spotdl${spotdl}" | tee -a "$GITHUB_OUTPUT"
+          echo "rev=${rev}"                | tee -a "$GITHUB_OUTPUT"
+          # ytdlp_norm, not ytdlp: PyPI reports 2026.8.19, the README and every
+          # human writing a tag by hand write 2026.08.19, and the padded form
+          # sorts correctly. The published image was labelled 2026.8.19 while
+          # the README documented 2026.08.19, so one of them had to change.
+          echo "tag=${ytdlp_norm}-spotdl${spotdl}-${rev}" | tee -a "$GITHUB_OUTPUT"
 
       - name: Decide whether a build is needed
         id: decide
