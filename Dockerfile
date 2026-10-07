@@ -74,6 +74,7 @@ ENV HOME=/home/spotdl \
 
 # Guard rail: never publish an image where the patch did not actually land.
 RUN grep -q "def resolve_songs" /app/spotdl/web/routes.py \
+ && grep -q "None, get_search_results" /app/spotdl/web/routes.py \
  && grep -q "download_song_with_retry" /app/spotdl/web/api.py \
  && spotdl --version \
  && /app/.venv/bin/yt-dlp --version

@@ -39,7 +39,7 @@ DEFAULT_BASE = (
     "b2ac304bdbf50d2ba23ffd490f922cdda99f5eeb8da170ff2d169e563dba43ed"
 )
 
-VERSION = "4.5.2-r1"
+VERSION = "4.5.2-r2"
 
 # Hunks separated by at most this many unchanged lines are merged into one rule
 # so anchors stay long enough to be unambiguous.
@@ -255,6 +255,14 @@ Fixes
 3. Releases whose audio-provider match scores below spotdl's threshold are
    retried once with the similarity filter relaxed. Matching stays strict for
    everything that already resolves.
+
+4. The search box no longer freezes the interface. `get_search_results` blocks
+   and was called straight from an `async def` handler, so the single uvicorn
+   event loop stalled for as long as Spotify took - minutes - and every page in
+   the UI went unreachable. It now runs in a worker thread. The url branch of
+   the same handler gains the missing `return`, so a download is not followed by
+   a pointless Spotify search for the url string and an empty result list being
+   patched into a page the browser has already left.
 """
 
 from __future__ import annotations

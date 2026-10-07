@@ -144,6 +144,9 @@ jobs:
           docker run --rm --entrypoint grep spotdl-smoke:latest \
             -q "download_song_with_retry" /app/spotdl/web/api.py \
             || fail "web/api.py is not patched"
+          docker run --rm --entrypoint grep spotdl-smoke:latest \
+            -q "None, get_search_results" /app/spotdl/web/routes.py \
+            || fail "search handler is not patched (UI would still freeze)"
 
           # The CLI must work from a plain shell, at the version we built from.
           docker run --rm --entrypoint sh spotdl-smoke:latest -c \

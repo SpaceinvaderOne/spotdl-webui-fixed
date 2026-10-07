@@ -161,6 +161,28 @@ grabs whatever YouTube Music ranks #1 — each failed track is retried once with
 the filter relaxed. On a 14-track techno compilation that was the difference
 between 5 tracks and 14.
 
+**4. One search made the entire web UI unreachable for minutes.**
+`handle_get_client_search()` is `async def`, and upstream calls the blocking
+`get_search_results()` straight from it:
+
+```python
+songs = get_search_results(signals.search_term)   # blocks the event loop
+```
+
+That call fires one Spotify query and then builds a `Song` for every hit, one at
+a time. Uvicorn runs one event loop, so while it runs *nothing* else is served -
+not the home page, not your other tabs, not the `/api` endpoints. Measured on a
+real box, a search for "Daft Punk" took 337 s and 19 of 20 requests to `/` timed
+out completely during it (`dev/ab-probe.sh` reproduces this). It now runs in a
+worker thread, so the interface stays live while results load.
+
+The same handler also lacked a `return` after the URL branch, so every download
+was followed by a wasted Spotify search for the URL string itself — which
+matches nothing — and an empty result list patched into a page the browser had
+already been redirected away from. Measured: one dead API call and 1.2 KB of
+stray HTML per download. Small, but it is a round trip that can fail *after* a
+download succeeded and report the whole thing as an error.
+
 ## Staying current
 
 The image is rebuilt **daily** by `.github/workflows/build.yml`, which resolves
@@ -244,6 +266,17 @@ If the version is old, the image was pulled but the container was never
 restarted (`docker pull` does not update a running container). If the version
 is current, YouTube is rate-limiting your IP; a VPN, a proxy, or a browser
 cookie file (`cookie_file` in Settings) will clear it.
+
+**The web UI goes unreachable while a search is running.** Upstream resolves
+search results on the event loop (item 4 above), so one search made every page
+unresponsive for minutes. Fixed in `4.5.2-r2`. If searches still freeze the
+interface, your container predates that release — pull and recreate, then check:
+
+```bash
+docker exec <container> grep -c "run_in_executor" /app/spotdl/web/routes.py
+```
+
+Two hits means you have the fix, one means you are still on the old image.
 
 **`spotdl: command not found` inside the container.** You are looking at the
 upstream image, not this one — the launcher only exists here. Check
