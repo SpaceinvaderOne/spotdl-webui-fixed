@@ -191,6 +191,31 @@ already been redirected away from. Measured: one dead API call and 1.2 KB of
 stray HTML per download. Small, but it is a round trip that can fail *after* a
 download succeeded and report the whole thing as an error.
 
+**5. Pasting a URL into the search box downloaded nothing — in a browser.**
+The handler redirects you to the downloads page, then does the download *inside
+the very request that carried the redirect*:
+
+```python
+yield SSE.redirect("/downloads")
+...
+async for update in gen_download(signals):   # dies when the browser obeys
+    yield update
+```
+
+Obeying a redirect means navigating, and navigating aborts the request that is
+still streaming it. Uvicorn cancels the handler mid-flight: the album resolves,
+then vanishes before the first track. The log ends at `Download requested`, the
+Queue says *"No downloads are queued"*, and no error is ever raised — which is
+why this one is so easy to mistake for YouTube rate-limiting you.
+
+That last part is on me as much as upstream. The download path was verified with
+a scripted client that held the connection open for the whole transfer, and
+holding the connection open is exactly what a browser navigating away does not
+do. `dev/abort-probe.sh` now hangs up mid-request the way a browser does and
+fails if the download goes with it. The download runs as an independent task
+now — which is how the downloads page observes it anyway, since it polls the
+client's progress tracker instead of reading that stream.
+
 ## Staying current
 
 The image is rebuilt **daily** by `.github/workflows/build.yml`, which resolves
@@ -285,6 +310,18 @@ docker exec <container> grep -c "run_in_executor" /app/spotdl/web/routes.py
 ```
 
 Two hits means you have the fix, one means you are still on the old image.
+
+**The Queue stays on "No downloads are queued" right after you paste a URL.**
+On builds before `4.5.2-r3` the download was cancelled by the page navigation
+that pasting a URL causes (item 5 above). Nothing failed, so nothing was
+reported. Fixed in `4.5.2-r3`; check which one you are on:
+
+```bash
+docker exec <container> grep -c "create_task(_drain" /app/spotdl/web/routes.py
+```
+
+`1` means you have the fix. `0` means a URL paste resolves the release and then
+throws the work away — try the `/api/download/url` endpoint, or update.
 
 **`spotdl: command not found` inside the container.** You are looking at the
 upstream image, not this one — the launcher only exists here. Check

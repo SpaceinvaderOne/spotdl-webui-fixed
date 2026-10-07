@@ -39,7 +39,7 @@ DEFAULT_BASE = (
     "b2ac304bdbf50d2ba23ffd490f922cdda99f5eeb8da170ff2d169e563dba43ed"
 )
 
-VERSION = "4.5.2-r2"
+VERSION = "4.5.2-r3"
 
 # Hunks separated by at most this many unchanged lines are merged into one rule
 # so anchors stay long enough to be unambiguous.
@@ -263,6 +263,14 @@ Fixes
    the same handler gains the missing `return`, so a download is not followed by
    a pointless Spotify search for the url string and an empty result list being
    patched into a page the browser has already left.
+
+5. Pasting an album or playlist url into the search box now downloads it. The
+   handler yields a redirect to /downloads and then awaits the download inside
+   the same request - but obeying a redirect means navigating, and navigating
+   aborts the request, cancelling the download mid-flight. The release resolves,
+   the log stops at "Download requested", and the queue stays empty forever with
+   no error anywhere. The download runs as an independent task now, which is how
+   the downloads page sees it anyway: it polls the client's progress tracker.
 """
 
 from __future__ import annotations

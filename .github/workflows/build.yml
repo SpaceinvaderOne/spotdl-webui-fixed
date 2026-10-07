@@ -162,6 +162,11 @@ jobs:
           docker run --rm --entrypoint grep spotdl-smoke:latest \
             -q "None, get_search_results" /app/spotdl/web/routes.py \
             || fail "search handler is not patched (UI would still freeze)"
+          # The one that fails silently: a url paste resolves and downloads
+          # nothing, with no error in the log.
+          docker run --rm --entrypoint grep spotdl-smoke:latest \
+            -q "create_task(_drain" /app/spotdl/web/routes.py \
+            || fail "url download is still tied to its request (paste a url and it does nothing)"
 
           # The CLI must work from a plain shell, at the version we built from.
           docker run --rm --entrypoint sh spotdl-smoke:latest -c \

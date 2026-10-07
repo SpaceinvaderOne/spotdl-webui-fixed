@@ -1,6 +1,6 @@
 # spotDL, with the web interface repaired.
 #
-# Three things are wrong with the upstream `spotdl/spotify-downloader` image:
+# Four things are wrong with the upstream `spotdl/spotify-downloader` image:
 #
 #   1. The bundled yt-dlp goes stale within weeks and YouTube starts answering
 #      the media requests with `HTTP Error 403: Forbidden`, which makes *every*
@@ -9,8 +9,12 @@
 #      page says it can: the download endpoint calls `Song.from_url()`, whose
 #      first statement rejects any URL that is not a `/track/` URL.
 #   3. One search in the UI takes the whole interface down for minutes, because
-#      the handler runs a blocking lookup on the event loop. See the README for
-#      the measured numbers.
+#      the handler runs a blocking lookup on the event loop.
+#   4. Pasting an album url into the search box downloads nothing at all in a
+#      browser: the redirect the handler issues aborts the request that is
+#      carrying the download.
+#
+# See the README for measurements behind each one.
 #
 # This Dockerfile does not rebuild spotdl. It stacks a thin repair layer on top
 # of the published image, so upstream keeps owning everything else.
@@ -78,6 +82,7 @@ ENV HOME=/home/spotdl \
 # Guard rail: never publish an image where the patch did not actually land.
 RUN grep -q "def resolve_songs" /app/spotdl/web/routes.py \
  && grep -q "None, get_search_results" /app/spotdl/web/routes.py \
+ && grep -q "create_task(_drain" /app/spotdl/web/routes.py \
  && grep -q "download_song_with_retry" /app/spotdl/web/api.py \
  && spotdl --version \
  && /app/.venv/bin/yt-dlp --version
